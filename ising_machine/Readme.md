@@ -28,6 +28,3 @@ Project\slm_display\lib\winXX\bin
 ## Issue
 Issue pending
 - copying manual libs and dll need to be done
-
-
-# https://github.com/ml5713/Verilog-Matrix-multiply-vector/blob/master/inner_product/verilog/inner_product.v
