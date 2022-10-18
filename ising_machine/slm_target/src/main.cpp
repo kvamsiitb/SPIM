@@ -34,6 +34,7 @@
 #include "opencv2/core/core.hpp"
 using namespace holoeye;
 
+#define ASSERT(condition) { if(!(condition)){ std::cerr << "ASSERT FAILED: " << #condition << " @ " << __FILE__ << " (" << __LINE__ << ")" << std::endl; } }
 
 // Namespace for using pylon objects.
 using namespace Pylon;
@@ -43,13 +44,15 @@ using namespace std;
 using namespace cv;
 // Number of images to be grabbed.
 static const uint32_t c_countOfImagesToGrab = 1;
-//#include "show_slm_preview.h"
+#include "cpp/show_slm_preview.h"
 
 #include <thread>
 #include <chrono>
 #include <slm_target\utils.hpp>
 
-vector<pair< unsigned int, unsigned int> > spin_tuple(pair<unsigned int, unsigned int> shape
+#define NUM_SPINS_FLIP 4
+
+vector<pair< unsigned int, unsigned int> > SpinTuple(pair<unsigned int, unsigned int> shape
 	, unsigned int bin_size)
 {
 	vector<pair< unsigned int, unsigned int> > lattice_val;
@@ -70,28 +73,18 @@ vector<double> create_beta_schedule_linear(uint32_t num_sweeps, double beta_star
 		beta_max = (1 / 1000) * beta_start;//  here temperature will be zero when beta_max is 1000.f
 	else
 		beta_max = beta_end;
-	double diff = (beta_start - beta_max) / (num_sweeps - 1);// A.P 3.28 - 0.01 inverse value increa finnal decrease
+	double diff = (beta_start - beta_max) / (num_sweeps - 1);// A.P 3.28 - 0.01 inverse value increa final decrease
 	for (int i = 0; i < num_sweeps; i++)
 	{
 		double val = beta_start - (i)*diff;
-		beta_schedule.push_back((1.f / val));
+		beta_schedule.push_back( val );
 	}
 
 	return beta_schedule;
 }
 
-/*
-1 buffer : If fails revert the data by remembering the index
-*/
-void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHeight, int size_outer_bins, int size_bins
-	, std::vector<float> numbVec)
+void DisplayCheckerBoardPattern(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHeight, pair< int, int> area, int outer_bins)
 {
-	float maxNum = *std::max_element(numbVec.begin(), numbVec.end());
-
-	for (int i = 0; i < numbVec.size(); i++)
-		numbVec[i] = acos(numbVec.at(i) / maxNum);
-
-	
 	// Initial it to zero
 	for (int y = 0; y < dataHeight; ++y)
 	{
@@ -103,8 +96,6 @@ void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int d
 	}
 
 	// Checkboard pattern of 16 bins
-	int outer_bins = pow(2, size_outer_bins);
-	pair< int, int> area = { 1024, 1024 };
 	int sideHeight = (dataHeight - area.first) / 2;
 	int sideWidth = (dataWidth - area.second) / 2;
 	// number of boxes 
@@ -120,13 +111,24 @@ void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int d
 			}
 		}
 	}
+}
+/*
+1 buffer : If fails revert the data by remembering the index
+*/
+void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHeight, pair< int, int> area, int outer_bins
+	, std::vector<float> numbVec, std::vector<float> isingSpins, pair<int, int> active_area, int bins)
+{
+	float maxNum = *std::max_element(numbVec.begin(), numbVec.end());
 
+	for (int i = 0; i < numbVec.size(); i++)
+		numbVec[i] = acos(numbVec.at(i) / maxNum);
 
+	for (auto ele : numbVec)
+		cout << ele << endl;
 	// Checkboard pattern of 8 bins
-	int bins = pow(2, size_bins);
-	pair<int, int> active_area = { 512, 512 };
-	sideHeight = (dataHeight - active_area.first) / 2;
-	sideWidth = (dataWidth - active_area.second) / 2;
+	//pair<int, int> active_area = { 512, 512 };
+	int sideHeight = (dataHeight - active_area.first) / 2;
+	int sideWidth = (dataWidth - active_area.second) / 2;
 
 	vector< vector< float > > check;
 	check.resize(active_area.first);
@@ -147,6 +149,7 @@ void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int d
 		}
 	}
 
+	
 	for (int y = 0; y < active_area.first / bins; ++y)
 	{
 		for (int x = 0; x < active_area.second / bins; ++x)
@@ -154,14 +157,54 @@ void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int d
 			for (int k = 0; k < bins; ++k)
 			{
 				float* row = phaseData->row(y * bins + k + sideHeight);
+				// (-1)^j cos-1 Em
 				for (int l = 0; l < bins; ++l)
-					row[x * bins + l + sideWidth] = numbVec[y * (active_area.first / bins) + x] * check[y * bins + k][x * bins + l];// HOLOEYE_PIF* ((x + y) % 2);
+					row[x * bins + l + sideWidth] =
+					(isingSpins[y * (active_area.first / bins) + x] + 1) * HOLOEYE_PIF / 2 + HOLOEYE_PIF / 2 +
+												numbVec[y * (active_area.first / bins) + x] * check[y * bins + k][x * bins + l];
+					
 			}
 		}
 	}
 }
 
+void FLipLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHeight, std::vector<float> isingSpins,
+	pair<int, int> active_area, int bins, vector<pair< unsigned int, unsigned int> >  spinLatticePts, vector<unsigned int> selLatticeIndex)
+{
+	int sideHeight = (dataHeight - active_area.first) / 2;
+	int sideWidth = (dataWidth - active_area.second) / 2;
+	for (unsigned int sel_spin = 0; sel_spin < selLatticeIndex.size(); ++sel_spin)
+	{
+		int y = spinLatticePts.at(sel_spin).first;
+		int x = spinLatticePts.at(sel_spin).second;
+		
+		for (int k = 0; k < bins; ++k)
+		{
+			float* row = phaseData->row(y * bins + k + sideHeight);
+			// (-1)^j cos-1 Em
+			for (int l = 0; l < bins; ++l)
+			{
+				if (isingSpins[y * (active_area.first / bins) + x] == 1.f)
+				{
+					row[x * bins + l + sideWidth] -= HOLOEYE_PIF;
+				}
+				else if (isingSpins[y * (active_area.first / bins) + x] == -1.f)
+				{
+					row[x * bins + l + sideWidth] += HOLOEYE_PIF;
+				}
+				else {
+					std::cout << "Rama rama" << std::endl;
+				}
+			}
+			
+		}
+		isingSpins[y * (active_area.first / bins) + x] *= -1.f;
+	}
+}
 
+#define HOLOEYE_DEBUG 1
+
+#if HOLOEYE_DEBUG
 int main(int argc, char* argv[])
 {
 		HOLOEYE_UNUSED(argc);
@@ -180,12 +223,17 @@ int main(int argc, char* argv[])
 			return error;
 		}
 
-		// Configure the axicon properties:
-		const int innerRadius = heds_slm_height_px() / 3;
-		const int centerX = 0;
-		const int centerY = 0;
-
-		// Calculate the phase values of an axicon in a pixel-wise matrix:
+		// Open the SLM preview window in "Fit" mode:
+		// Please adapt the file show_slm_preview.h if preview window
+		// is not at the right position or even not visible.
+		// The additional flag HEDSSLMPF_ShowZernikeRadius presses the button to
+		// show the Zernike radius visualization in preview window from code.
+		error = show_slm_preview(0.0);
+		if (error != HEDSERR_NoError)
+		{
+			std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
+			return error;
+		}
 
 		// pre-calc. helper variables:
 		const float phaseModulation = 2.0f * HOLOEYE_PIF;
@@ -194,117 +242,158 @@ int main(int argc, char* argv[])
 
 		// Reserve memory for the phase data matrix.
 		// Use data type single to optimize performance:
-		shared_ptr<field<float>> phaseData = field<float>::create(dataWidth, dataHeight);
+		auto phaseData = field<float>::create(dataWidth, dataHeight);
 		
 		// phaseData.refreshrate()
 		std::cout << "dataWidth  = " << dataWidth << std::endl;
 		std::cout << "dataHeight = " << dataHeight << std::endl;
 
+		// Display checkerboard of size {1024, 1024}  and bins {16, 16}
+		int outer_bin = pow(2, 6); 
+		pair< int, int> area = { 1024, 1024 };
+		DisplayCheckerBoardPattern(phaseData, dataWidth, dataHeight, area, outer_bin);
+		// Show phase data on SLM:
+		error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
+		if (error != HEDSERR_NoError)
+		{
+			std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
+			return error;
+		}
+		
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+		std::cout << "Do Ur calibration Using Pylon GUI and then press enter" << std::endl;
+		char ch = getchar();
+		//
 		ParseData parseObj = ParseData();
 
 		std::vector<float> numberVect;
-		parseObj.readNumberCSV("numbers.csv", numberVect);
-		InitialSLMLattice(phaseData, dataWidth, dataHeight, 4, 3, numberVect);
+		parseObj.readNumberCSV("numbers4.csv", numberVect);
 
+		std::vector<float> isingSpins;
+		srand(time(0));
+		for (int i = 0; i < numberVect.size(); ++i)
+			isingSpins.push_back( float( 2.f * (rand() % 2) - 1.f) );
 
+		//for (int i = 0; i < isingSpins.size(); ++i)
+		//	isingSpins[i] = (isingSpins[i] + 1) * HOLOEYE_PIF / 2 + HOLOEYE_PIF / 2; //@R remove PI from Ising Spins
 
-
-		float** temp;
-		float** check;
+ 		ASSERT(numberVect.size() == isingSpins.size());
+		int bin = pow(2, 7);// pow(2, 3);
+		pair<int, int> active_area = { 512, 512 };
+		InitialSLMLattice(phaseData, dataWidth, dataHeight, area, outer_bin, numberVect, isingSpins, active_area, bin);
 
 		// Show phase data on SLM:
 		error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
-		
 		if (error != HEDSERR_NoError)
 		{
 			std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
-
 			return error;
 		}
-
-		// You may insert further code here.
-
-		// Wait until the SLM process was closed
-		std::cout << "Waiting for SDK process to close. Please close the tray icon to continue ..." << std::endl << std::flush;
-		error = heds_utils_wait_until_closed();
-
-		if (error != HEDSERR_NoError)
-		{
-			std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
-
-			return error;
-		}
-
-
-			// The exit code of the sample application.
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+		std::cout << "See the expected pattern on camera" << std::endl;
+		cin >> ch;
+		// The exit code of the sample application.
 		int exitCode = 0;
 
+		vector<double> vecBetas = create_beta_schedule_linear(2, 1.f, 0.2f);
 		// Before using any pylon methods, the pylon runtime must be initialized.
 		PylonInitialize();
 
-		try
+
+		// Create an instant camera object with the camera device found first.
+		CInstantCamera camera( CTlFactory::GetInstance().CreateFirstDevice() );
+
+		// Print the model name of the camera.
+		cout << "Using device " << camera.GetDeviceInfo().GetModelName() << endl;
+
+		// The parameter MaxNumBuffer can be used to control the count of buffers
+		// allocated for grabbing. The default value of this parameter is 10.
+		camera.MaxNumBuffer = 1;
+		//camera.ExposureTime.SetValue(1000.f);
+		// This smart pointer will receive the grab result data.
+		CGrabResultPtr ptrGrabResult;
+
+		// Lattice creation
+		vector<pair< unsigned int, unsigned int> >  spinLatticePts = SpinTuple( active_area, bin);
+		vector<unsigned int> selLatticeIndex; 
+		selLatticeIndex.resize(NUM_SPINS_FLIP, 0);
+
+		std::cout << " aojfbsak;jsn  0 " << std::endl;
+		// Flip lattice
+		for (auto beta : vecBetas)
 		{
-			// Create an instant camera object with the camera device found first.
-			CInstantCamera camera( CTlFactory::GetInstance().CreateFirstDevice() );
+			for (int i = 0; i < NUM_SPINS_FLIP; i++)
+				selLatticeIndex[i] = rand() % spinLatticePts.size();
 
-			// Print the model name of the camera.
-			cout << "Using device " << camera.GetDeviceInfo().GetModelName() << endl;
+			std::cout << " aojfbsak;jsn  1 " << std::endl;
+			FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
 
-			// The parameter MaxNumBuffer can be used to control the count of buffers
-			// allocated for grabbing. The default value of this parameter is 10.
-			camera.MaxNumBuffer = 5;
-
-			// Start the grabbing of c_countOfImagesToGrab images.
-			// The camera device is parameterized with a default configuration which
-			// sets up free-running continuous acquisition.
-			camera.StartGrabbing( c_countOfImagesToGrab );
-
-			// This smart pointer will receive the grab result data.
-			CGrabResultPtr ptrGrabResult;
-
-			// Camera.StopGrabbing() is called automatically by the RetrieveResult() method
-			// when c_countOfImagesToGrab images have been retrieved.
-			while (camera.IsGrabbing())
+			// Show phase data on SLM:
+			error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
+			if (error != HEDSERR_NoError)
 			{
-				// Wait for an image and then retrieve it. A timeout of 5000 ms is used.
-				camera.RetrieveResult( 5000, ptrGrabResult, TimeoutHandling_ThrowException );
-
-				// Image grabbed successfully?
-				if (ptrGrabResult->GrabSucceeded())
+				std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
+				return error;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(150));
+			try
+			{
+				// Start the grabbing of c_countOfImagesToGrab images.
+				// The camera device is parameterized with a default configuration which
+				// sets up free-running continuous acquisition.
+				camera.StartGrabbing(c_countOfImagesToGrab);
+				// Camera.StopGrabbing() is called automatically by the RetrieveResult() method
+				// when c_countOfImagesToGrab images have been retrieved.
+				std::cout << " aojfbsak;jsn  camera.IsGrabbing" << std::endl;
+				while (camera.IsGrabbing())
 				{
-					// Access the image data.
-					cout << "SizeX: " << ptrGrabResult->GetWidth() << endl;
-					cout << "SizeY: " << ptrGrabResult->GetHeight() << endl;
-					const uint8_t* pImageBuffer = (uint8_t*) ptrGrabResult->GetBuffer();
-					cout << "Gray value of first pixel: " << (uint32_t) pImageBuffer[0] << endl << endl;
+					// Wait for an image and then retrieve it. A timeout of 5000 ms is used.
+					camera.RetrieveResult(5000, ptrGrabResult, TimeoutHandling_ThrowException);
 
-	#ifdef PYLON_WIN_BUILD
-					// Display the grabbed image.
-					//Pylon::DisplayImage( 1, ptrGrabResult );
-	#endif
-				//CPylonImage pylonImage;
+					std::cout << " ptrGrabResult->GrabSucceeded" << std::endl;
+					// Image grabbed successfully?
+					if (ptrGrabResult->GrabSucceeded())
+					{
+						// Access the image data.
+						cout << "SizeX: " << ptrGrabResult->GetWidth() << endl;
+						cout << "SizeY: " << ptrGrabResult->GetHeight() << endl;
+						const uint8_t* pImageBuffer = (uint8_t*)ptrGrabResult->GetBuffer();
+						cout << "Gray value of first pixel: " << (uint32_t)pImageBuffer[0] << endl << endl;
 
-				//formatConverter.Convert(pylonImage, ptrGrabResult);//me
-				// Create an OpenCV image out of pylon image
-				Mat openCvImage = Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC1, (void*)ptrGrabResult->GetBuffer());
+#ifdef PYLON_WIN_BUILD
+						// Display the grabbed image.
+						//Pylon::DisplayImage( 1, ptrGrabResult );
+					    // Create an OpenCV image out of pylon image
+						Mat openCvImage = Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC1, (void*)ptrGrabResult->GetBuffer());
 
-				imshow("my camera", openCvImage);
-				waitKey(0);
-				}
-				else
-				{
-					cout << "Error: " << std::hex << ptrGrabResult->GetErrorCode() << std::dec << " " << ptrGrabResult->GetErrorDescription() << endl;
+						imshow("my camera", openCvImage);
+						waitKey(0);
+#endif
+
+						// MH algo
+
+						// sum of Ising spins with numbers for fidelity
+
+						// Flip back if not selected in MH iter
+						FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
+
+					}
+					else
+					{
+						cout << "Error: " << std::hex << ptrGrabResult->GetErrorCode() << std::dec << " " << ptrGrabResult->GetErrorDescription() << endl;
+					}
 				}
 			}
-		}
-		catch (const GenericException& e)
-		{
-			// Error handling.
-			cerr << "An exception occurred." << endl
-				<< e.GetDescription() << endl;
-			exitCode = 1;
-		}
+			catch (const GenericException & e)
+			{
+				// Error handling.
+				std::cerr << "An exception occurred." << endl
+					<< e.GetDescription() << endl;
+				exitCode = 1;
+			}
 
+		}
 			// Wait until the SLM process was closed
 		std::cout << "Waiting for SDK process to close. Please close the tray icon to continue ..." << std::endl << std::flush;
 		error = heds_utils_wait_until_closed();
@@ -316,19 +405,18 @@ int main(int argc, char* argv[])
 			return error;
 		}
 
-
-
-
-		// Comment the following two lines to disable waiting on exit.
-		cerr << endl << "Press enter to exit." << endl;
-		while (cin.get() != '\n');
-
+		camera.Close();
 		// Releases all pylon resources.
 		PylonTerminate();
+		
+		// Comment the following two lines to disable waiting on exit.
+		std::cerr << endl << "Press enter to exit." << endl;
+		while (cin.get() != '\n');
 
 		return exitCode;
 	
 }
+#endif
 
 #define CPU_GPU_COMPARISON 0
 
