@@ -34,7 +34,7 @@ void ParseData::readNumberCSV(const string filename, std::vector<float>& NumberV
 	}
 	else
 	{
-		std::cerr << " [ERROR] Linear File not opening " << std::endl;
+		std::cerr << " [ERROR] NumberCSV File not opening " << std::endl;
 	}
 
 	// print the value of the vector

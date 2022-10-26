@@ -1,19 +1,8 @@
 /************************ \cond COPYRIGHT *****************************
  *                                                                    *
- * Copyright (C) 2020 HOLOEYE Photonics AG. All rights reserved.      *
- * Contact: https://holoeye.com/contact/                              *
- *                                                                    *
- * This file is part of HOLOEYE SLM Display SDK.                      *
- *                                                                    *
- * You may use this file under the terms and conditions of the        *
- * "HOLOEYE SLM Display SDK Standard License v1.0" license agreement. *
+ * Developed by N Krishna Vamsi for Spatial Photonic Ising Machine    *
  *                                                                    *
  **************************** \endcond ********************************/
-
-
- // Calculates an axicon and shows it on the SLM.
-
- // Please see readme.txt file located in the same folder of this example on how to compile this code.
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -24,6 +13,9 @@
 
 #include <cpp/holoeye_slmdisplaysdk.hpp>
 #include <pylon/PylonIncludes.h>
+#include <pylon/BaslerUniversalInstantCamera.h>
+#include <slm_target/getopt.h>
+
 #ifdef PYLON_WIN_BUILD
 //    include <pylon/PylonGUI.h>
 #endif
@@ -34,6 +26,7 @@
 #include "opencv2/core/core.hpp"
 using namespace holoeye;
 
+using HoloeyeType = field<float>;
 #define ASSERT(condition) { if(!(condition)){ std::cerr << "ASSERT FAILED: " << #condition << " @ " << __FILE__ << " (" << __LINE__ << ")" << std::endl; } }
 
 // Namespace for using pylon objects.
@@ -83,7 +76,7 @@ vector<double> create_beta_schedule_linear(uint32_t num_sweeps, double beta_star
 	return beta_schedule;
 }
 
-void DisplayCheckerBoardPattern(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHeight, pair< int, int> area, int outer_bins)
+void DisplayCheckerBoardPattern(shared_ptr<HoloeyeType>& phaseData, int dataWidth, int dataHeight, pair< int, int> area, int outer_bins)
 {
 	// Initial it to zero
 	for (int y = 0; y < dataHeight; ++y)
@@ -115,16 +108,9 @@ void DisplayCheckerBoardPattern(shared_ptr<field<float>>& phaseData, int dataWid
 /*
 1 buffer : If fails revert the data by remembering the index
 */
-void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHeight, pair< int, int> area, int outer_bins
-	, std::vector<float> numbVec, std::vector<float> isingSpins, pair<int, int> active_area, int bins)
+void InitialSLMLattice(shared_ptr<HoloeyeType>& phaseData, int dataWidth, int dataHeight, 
+	std::vector<float>& numbVec, std::vector<float>& isingSpins, pair<int, int> active_area, int bins)
 {
-	float maxNum = *std::max_element(numbVec.begin(), numbVec.end());
-
-	for (int i = 0; i < numbVec.size(); i++)
-		numbVec[i] = acos(numbVec.at(i) / maxNum);
-
-	for (auto ele : numbVec)
-		cout << ele << endl;
 	// Checkboard pattern of 8 bins
 	//pair<int, int> active_area = { 512, 512 };
 	int sideHeight = (dataHeight - active_area.first) / 2;
@@ -142,7 +128,7 @@ void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int d
 		{
 			for (int k = 0; k < checkBin; ++k)
 			{
-				auto row = check.at(y * checkBin + k);
+				auto row = check[y * checkBin + k];
 				for (int l = 0; l < checkBin; ++l)
 					row[x * checkBin + l] = pow(-1.f, (x + y));
 			}
@@ -160,7 +146,7 @@ void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int d
 				// (-1)^j cos-1 Em
 				for (int l = 0; l < bins; ++l)
 					row[x * bins + l + sideWidth] =
-					(isingSpins[y * (active_area.first / bins) + x] + 1) * HOLOEYE_PIF / 2 + HOLOEYE_PIF / 2 +
+							(isingSpins[y * (active_area.first / bins) + x] + 1) * HOLOEYE_PIF / 2 + HOLOEYE_PIF / 2 +
 												numbVec[y * (active_area.first / bins) + x] * check[y * bins + k][x * bins + l];
 					
 			}
@@ -168,18 +154,21 @@ void InitialSLMLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int d
 	}
 }
 
-void FLipLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHeight, std::vector<float> isingSpins,
+void FLipLattice(shared_ptr<HoloeyeType> phaseData, int dataWidth, int dataHeight, std::vector<float>& isingSpins,
 	pair<int, int> active_area, int bins, vector<pair< unsigned int, unsigned int> >  spinLatticePts, vector<unsigned int> selLatticeIndex)
 {
+	cout << "-2. FLipLattice " << endl;
 	int sideHeight = (dataHeight - active_area.first) / 2;
 	int sideWidth = (dataWidth - active_area.second) / 2;
+	cout << "-1. FLipLattice " << endl;
 	for (unsigned int sel_spin = 0; sel_spin < selLatticeIndex.size(); ++sel_spin)
 	{
 		int y = spinLatticePts.at(sel_spin).first;
 		int x = spinLatticePts.at(sel_spin).second;
-		
+		cout << "0. FLipLattice" << endl;
 		for (int k = 0; k < bins; ++k)
 		{
+			cout << "0. FLipLattice " << k << endl;
 			float* row = phaseData->row(y * bins + k + sideHeight);
 			// (-1)^j cos-1 Em
 			for (int l = 0; l < bins; ++l)
@@ -195,6 +184,7 @@ void FLipLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHei
 				else {
 					std::cout << "Rama rama" << std::endl;
 				}
+				cout << "1. FLipLattice " << endl;
 			}
 			
 		}
@@ -202,18 +192,331 @@ void FLipLattice(shared_ptr<field<float>>& phaseData, int dataWidth, int dataHei
 	}
 }
 
-#define HOLOEYE_DEBUG 1
 
-#if HOLOEYE_DEBUG
+void CallBackFunc(int event, int x, int y, int flags, void* userdata)
+{
+	if (event == EVENT_LBUTTONDOWN)
+	{
+		cout << "Left button of the mouse is clicked - position (" << x << ", " << y << ")" << endl;
+	}
+}
+class BaslerCamera {
+public:
+	~BaslerCamera()
+	{
+		 delete _camera;
+	}
+	BaslerCamera(int _timeoutMs = 5000, int width = 1920, int height= 1080, int offsetx = 64, int offsety = 4, float exposure_value = 1100.0)
+	{
+		// Create the device and attach it to CInstantCamera.
+		// Let CInstantCamera take care of destroying the device.
+		//_camera->Attach(CTlFactory::GetInstance().CreateFirstDevice(), Pylon::Cleanup_Delete);
+		//cout << "Using device " << _camera->GetDeviceInfo().GetModelName() << endl;
+		cout << "Device initialized" << endl;
+
+		_camera = new CBaslerUniversalInstantCamera(CTlFactory::GetInstance().CreateFirstDevice(), Pylon::Cleanup_Delete);
+		// Open camera.
+		_camera->Open();
+		_camera->DeviceLinkThroughputLimitMode.SetValue("Off");
+
+		//Set the camera Region of Interest (ROI) to maximize allowed frame rate
+		int64_t maxWidth = _camera->Width.GetMax();      // Maximum width of camera in pixels
+		int64_t maxHeight = _camera->Height.GetMax();    // Maximum height of camera in pixels
+		
+
+		_camera->Width.SetValue(width);              // Set pixel width as lower than full allowed width
+		_camera->Height.SetValue(height);            // Set pixel height as lower than full allowed height
+
+		// https://docs.baslerweb.com/image-roi
+		_camera->OffsetX.SetValue(offsetx);          // Setting origin of the sensor array from the top left corner
+		_camera->OffsetY.SetValue(offsety);
+
+		//camera.GetNodeMap();
+		_camera->AcquisitionFrameRateEnable.SetValue(true);
+		// https://docs.baslerweb.com/resulting-frame-rate#factors-limiting-the-frame-rate
+		// Decrease the exposure time, Image ROI, Sensor Bit Depth
+		_camera->AcquisitionFrameRate.SetValue(150.0);
+		//cout << "frame rate set" << endl;
+		double rate = _camera->ResultingFrameRate.GetValue();
+		cout << "frame rate is:" << rate << endl;
+
+		//// Set the pixel data format.
+		
+		//_camera->PixelFormat.SetValue(Basler_UniversalCameraParams::PixelFormat_Mono8);
+
+		// Get the ExposureTime feature.
+		// On GigE cameras, the feature is called 'ExposureTimeRaw'.
+		// On USB cameras, it is called 'ExposureTime'.
+		if (_camera->ExposureTime.IsValid())
+		{
+			// We need the integer representation because the GUI controls can only use integer values.
+			// If it doesn't exist, return an empty parameter.
+			_camera->ExposureTime.SetValue(exposure_value);
+		}
+		else // if (_camera->ExposureTimeRaw.IsValid())
+		{
+			cout << "How dark" << endl;
+			// m_exposureTime.Attach(_camera->ExposureTimeRaw.GetNode());
+		}
+		
+	}
+
+	void checkImage()
+	{
+		cout << "here i am" << endl;
+		// This smart pointer will receive the grab result data.
+		
+		cout << "0. here i am" << endl;
+		// GrabOne calls StartGrabbing and StopGrabbing internally.
+		// As seen above Open() is called by StartGrabbing and
+		// the OnOpened() method of the CAcquireSingleFrameConfiguration handler is called.
+		//_camera->GrabOne(_timeoutMs, _ptrGrabResult);
+
+		//grab one image
+		_camera->StartGrabbing(1, GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
+		//grab is stopped automatically due to maxImages = 1
+		_camera->RetrieveResult(_timeoutMs, _ptrGrabResult, TimeoutHandling_ThrowException) && _ptrGrabResult->GrabSucceeded();
+
+		cout << "1. here i am" << endl;
+		cout << "SizeX: " << _ptrGrabResult->GetWidth() << endl;
+		cout << "SizeY: " << _ptrGrabResult->GetHeight() << endl;
+		// Image grabbed successfully?
+		cout << "2. here i am" << endl;
+		if (_ptrGrabResult->GrabSucceeded())
+		{
+			Mat openCvImage = Mat(_ptrGrabResult->GetHeight(), _ptrGrabResult->GetWidth(), CV_8UC1, (void*)_ptrGrabResult->GetBuffer());
+			//Create a window
+			namedWindow("My Window", 1);
+			//set the callback function for any mouse event
+			setMouseCallback("My Window", CallBackFunc, NULL);
+			//show the image
+			imshow("My Window", openCvImage);
+			waitKey(0);
+		}
+		cout << "Provide _xin, _yin, _xout, _yout in this order" << endl;
+		std::cin >> _xin;
+		std::cin >> _yin;
+		std::cin >> _xout;
+		std::cin >> _yout;
+		std::cout << " "<< _xin << " " << _yin << " " << _xout << " " << _yout << endl;
+		
+		_heightFinImg = _xout - _xin;
+		_widthFinImg = _yout - _yin;
+		_areaFinImg = _heightFinImg * _widthFinImg;
+	}
+
+	void openBaslerCamera()
+	{
+		_camera->Open();
+	}
+
+	float collectSingleImageNEnergy()
+	{
+		// https://docs.baslerweb.com/pylonapi/cpp/pylon_advanced_topics#one-by-one-grab-strategy
+		
+		//_camera->GrabOne(5000, _ptrGrabResult);
+
+		//grab one image
+		_camera->StartGrabbing(1, GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
+
+		//grab is stopped automatically due to maxImages = 1
+		_camera->RetrieveResult(_timeoutMs, _ptrGrabResult, TimeoutHandling_ThrowException) && _ptrGrabResult->GrabSucceeded();
+
+		float energy;
+		
+		//if (_ptrGrabResult->GrabSucceeded())
+		//{
+			const uint8_t* pImageBuffer = (uint8_t*)_ptrGrabResult->GetBuffer();
+
+			int sum = 0;
+			for (int y = _yin; y < _yout; ++y)
+				for (int x = _xin; x < _xout; x++)
+					sum += (int)pImageBuffer[y * _heightFinImg + x];
+
+			energy = sum / _areaFinImg;
+		//}
+		//else
+		//{
+			//cout << "Error: " << std::hex << _ptrGrabResult->GetErrorCode() << std::dec << " " << _ptrGrabResult->GetErrorDescription() << endl;
+		//}
+		return energy;
+	}
+	void closeBaslerCamera()
+	{
+		_camera->Close();
+	}
+private:
+	// C:\Program Files\Basler\pylon 6\Development\Samples\C++\GUI_MFCMultiCam\GuiCamera.cpp
+	CBaslerUniversalInstantCamera* _camera;
+	// https://docs.baslerweb.com/auto-function-roi#sample-code
+	// CIntegerParameter m_exposureTime;
+	CGrabResultPtr _ptrGrabResult;
+	int _timeoutMs;
+	int _xin, _yin, _xout, _yout, _areaFinImg, _widthFinImg, _heightFinImg;
+};
+
+static void usage(const char* pname) {
+
+	const char* bname = nullptr;//@R = rindex(pname, '/');
+
+	fprintf(stdout,
+		"Usage: %s [options]\n"
+		"options:\n"
+		"\t-a|--filename  <String>\n"
+		"\t\tfilename containing numbers\n"
+		"\n"
+		"\t-x|--start temperature <FLOAT>\n"
+		"\t\t \n"
+		"\n"
+		"\t-y|--stop temperature <FLOAT>\n"
+		"\t\tnumber of lattice columns\n"
+		"\n"
+		"\t-n|--niters <INT>\n"
+		"\t\tnumber of iterations\n"
+		"\n"
+		"\t-n|--sweeps_per_beta <INT>\n"
+		"\t\tnumber of sweep per temperature\n"
+		"\n"
+		"\t-s|--seed <SEED>\n"
+		"\t\tfix the starting point\n"
+		"\n"
+		"\t-s|--debug \n"
+		"\t\t Print the final lattice value and shows avg magnetization at every temperature\n"
+		"\n"
+		"\t-o|--write-lattice\n"
+		"\t\twrite final lattice configuration to file\n\n",
+		bname);
+	exit(EXIT_SUCCESS);
+}
+
+#define MYDEBU 1
+
+
+// ./SPIM.exe -a numbers64.csv -x 6.4 -y 0.01 -n 3 -m 1 -1 1290 -2 508 -w 72 -h 92 -e 5000 -5 8 -6 512
 int main(int argc, char* argv[])
 {
-		HOLOEYE_UNUSED(argc);
-		HOLOEYE_UNUSED(argv);
+	vector<float> energies;
+	energies.push_back(255.0);
+	std::string filename = "";//argv[1]
+	std::string linear_file;
+
+	float start_temp = 20.f;
+	float stop_temp = 0.01f;
+	unsigned long long seed = ((GetCurrentProcessId() * rand()) & 0x7FFFFFFFF);
+
+	unsigned int num_temps = 1000; //atoi(argv[2]);
+	unsigned int num_sweeps_per_beta = 1;//atoi(argv[3]);
+
+
+	bool write = false;
+	bool debug = false;
+
+	int CamtimeoutMs = 5000;
+	int width = 1920;
+	int height = 1080;
+	int offsetx = 64;
+	int offsety = 4;
+	float exposure_value = 1100.0;// reduce for faster data transfer
+	int out_bi = 16;
+	int are = 1024;
+	int bi = 8;
+	int act_are = 512;
+
+	std::cout << "Start parsing the file containing numbers" << std::endl;
+
+	while (1) {
+		static struct option long_options[] = {
+			{     "Number_filename", required_argument, 0, 'a'},
+			{     "start_temp", required_argument, 0, 'x'},
+			{     "stop_temp", required_argument, 0, 'y'},
+			{          "seed", required_argument, 0, 's'},
+			{        "niters", required_argument, 0, 'n'},
+			{ "sweeps_per_beta", required_argument, 0, 'm'},
+			{  "CamTimeOut",       required_argument, 0, 't'},
+			{  "width",       required_argument, 0, 'w'},
+			{  "height",       required_argument, 0, 'h'},
+			{  "offsetx",       required_argument, 0, '1'},
+			{  "offsety",       required_argument, 0, '2'},
+			{  "exposure_value",       required_argument, 0, 'e'},
+			{  "outer_bin",       required_argument, 0, '3'},
+			{  "area",       required_argument, 0, '4'},
+			{  "bin",       required_argument, 0, '5'},
+			{  "active_area",       required_argument, 0, '6'},
+			{ "write-lattice",       no_argument, 0, 'o'},
+			{          "debug",       no_argument, 0, 'd'},
+			{          "help",       no_argument, 0, 'z'},
+			{               0,                 0, 0,   0}
+		};
+
+		int option_index = 0;
+		int ch = getopt_long(argc, argv, "a:x:y:s:n:m:t:w:h:1:2:e:3:4:5:6:odz", long_options, &option_index);
+		if (ch == -1) break;
+
+		switch (ch) {
+		case 0:
+			break;
+		case 'a':
+			filename = (optarg); break;
+		case 'x':
+			start_temp = atof(optarg); break;
+		case 'y':
+			stop_temp = atof(optarg); break;
+		case 's':
+			seed = atoll(optarg);
+			break;
+		case 'n':
+			num_temps = atoi(optarg); break;
+		case 'm':
+			num_sweeps_per_beta = atoi(optarg); break;
+		case 'o':
+			write = true; break;
+		case 'd':
+			debug = true; break;
+		case 'z':
+			usage(argv[0]); break;
+		case '?':
+			exit(EXIT_FAILURE);
+		case 't':
+			CamtimeoutMs = atoi(optarg); break;
+		case 'w':
+			width = atoi(optarg); break;
+		case 'h':
+			height = atoi(optarg); break;
+		case '1':
+			offsetx = atoi(optarg); break;
+		case '2':
+			offsety = atoi(optarg); break;
+		case 'e':
+			exposure_value = atof(optarg); break;
+		case '3':
+			out_bi = atoi(optarg); break;
+		case '4':
+			are = atoi(optarg); break;
+		case '5':
+			bi = atoi(optarg); break;
+		case '6':
+			act_are = atoi(optarg); break;
+		default:
+			fprintf(stderr, "unknown option: %c\n", ch);
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	HOLOEYE_UNUSED(argc);
+	HOLOEYE_UNUSED(argv);
+
 
 		// Check if the installed SDK supports the required API version
-		if( !heds_requires_version(3, false) )
+		if (!heds_requires_version(3, false))
 			return 1;
+		// Before using any pylon methods, the pylon runtime must be initialized.
+		PylonInitialize();
+		// The exit code of the sample application.
 
+		BaslerCamera baslerCamera = BaslerCamera(CamtimeoutMs, width, height, offsetx, offsety, exposure_value);
+		int exitCode = 0;
+		//baslerCamera.checkImage();
+#if MYDEBU
 		// Detect SLMs and open a window on the selected SLM:
 		heds_instance slm;
 		heds_errorcode error = slm.open();
@@ -228,6 +531,7 @@ int main(int argc, char* argv[])
 		// is not at the right position or even not visible.
 		// The additional flag HEDSSLMPF_ShowZernikeRadius presses the button to
 		// show the Zernike radius visualization in preview window from code.
+		
 		error = show_slm_preview(0.0);
 		if (error != HEDSERR_NoError)
 		{
@@ -242,15 +546,15 @@ int main(int argc, char* argv[])
 
 		// Reserve memory for the phase data matrix.
 		// Use data type single to optimize performance:
-		auto phaseData = field<float>::create(dataWidth, dataHeight);
+		auto phaseData = HoloeyeType::create(dataWidth, dataHeight);
 		
 		// phaseData.refreshrate()
 		std::cout << "dataWidth  = " << dataWidth << std::endl;
 		std::cout << "dataHeight = " << dataHeight << std::endl;
 
 		// Display checkerboard of size {1024, 1024}  and bins {16, 16}
-		int outer_bin = pow(2, 6); 
-		pair< int, int> area = { 1024, 1024 };
+		int outer_bin = out_bi;//pow(2, 4); 
+		pair< int, int> area = { are, are };
 		DisplayCheckerBoardPattern(phaseData, dataWidth, dataHeight, area, outer_bin);
 		// Show phase data on SLM:
 		error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
@@ -268,7 +572,11 @@ int main(int argc, char* argv[])
 		ParseData parseObj = ParseData();
 
 		std::vector<float> numberVect;
-		parseObj.readNumberCSV("numbers4.csv", numberVect);
+		parseObj.readNumberCSV(filename, numberVect);
+		float maxNum = *std::max_element(numberVect.begin(), numberVect.end());
+
+		for (int i = 0; i < numberVect.size(); i++)
+			numberVect[i] = acos(numberVect.at(i) / maxNum);
 
 		std::vector<float> isingSpins;
 		srand(time(0));
@@ -279,9 +587,10 @@ int main(int argc, char* argv[])
 		//	isingSpins[i] = (isingSpins[i] + 1) * HOLOEYE_PIF / 2 + HOLOEYE_PIF / 2; //@R remove PI from Ising Spins
 
  		ASSERT(numberVect.size() == isingSpins.size());
-		int bin = pow(2, 7);// pow(2, 3);
-		pair<int, int> active_area = { 512, 512 };
-		InitialSLMLattice(phaseData, dataWidth, dataHeight, area, outer_bin, numberVect, isingSpins, active_area, bin);
+		int bin = bi;// pow(2, 3);// pow(2, 7);
+		pair<int, int> active_area = { act_are, act_are};
+		cout << "1. InitialSLMLattice" << endl;
+		InitialSLMLattice(phaseData, dataWidth, dataHeight, numberVect, isingSpins, active_area, bin);
 
 		// Show phase data on SLM:
 		error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
@@ -292,109 +601,83 @@ int main(int argc, char* argv[])
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(150));
 		std::cout << "See the expected pattern on camera" << std::endl;
-		cin >> ch;
-		// The exit code of the sample application.
-		int exitCode = 0;
+		//baslerCamera.checkImage();// @R
+		
 
-		vector<double> vecBetas = create_beta_schedule_linear(2, 1.f, 0.2f);
-		// Before using any pylon methods, the pylon runtime must be initialized.
-		PylonInitialize();
-
-
-		// Create an instant camera object with the camera device found first.
-		CInstantCamera camera( CTlFactory::GetInstance().CreateFirstDevice() );
-
-		// Print the model name of the camera.
-		cout << "Using device " << camera.GetDeviceInfo().GetModelName() << endl;
-
-		// The parameter MaxNumBuffer can be used to control the count of buffers
-		// allocated for grabbing. The default value of this parameter is 10.
-		camera.MaxNumBuffer = 1;
-		//camera.ExposureTime.SetValue(1000.f);
-		// This smart pointer will receive the grab result data.
-		CGrabResultPtr ptrGrabResult;
+		vector<double> vecBetas = create_beta_schedule_linear(num_temps, 1.f / start_temp, 1.f / stop_temp);
+		cout << "2. baslerCamera.openBaslerCamera()" << endl;
+		baslerCamera.openBaslerCamera();
 
 		// Lattice creation
 		vector<pair< unsigned int, unsigned int> >  spinLatticePts = SpinTuple( active_area, bin);
 		vector<unsigned int> selLatticeIndex; 
 		selLatticeIndex.resize(NUM_SPINS_FLIP, 0);
 
-		std::cout << " aojfbsak;jsn  0 " << std::endl;
+
+		auto start = std::chrono::high_resolution_clock::now();
+		cout << "2.5. MH Loop " << endl;
 		// Flip lattice
-		for (auto beta : vecBetas)
+		for (int count = 0; count < vecBetas.size(); )
 		{
-			for (int i = 0; i < NUM_SPINS_FLIP; i++)
-				selLatticeIndex[i] = rand() % spinLatticePts.size();
+			for (int ii = 0; ii < num_sweeps_per_beta; ++ii)
+			{	
+				for (int i = 0; i < NUM_SPINS_FLIP; i++)
+					selLatticeIndex[i] = rand() % spinLatticePts.size();
 
-			std::cout << " aojfbsak;jsn  1 " << std::endl;
-			FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
-
-			// Show phase data on SLM:
-			error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
-			if (error != HEDSERR_NoError)
-			{
-				std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
-				return error;
-			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(150));
-			try
-			{
-				// Start the grabbing of c_countOfImagesToGrab images.
-				// The camera device is parameterized with a default configuration which
-				// sets up free-running continuous acquisition.
-				camera.StartGrabbing(c_countOfImagesToGrab);
-				// Camera.StopGrabbing() is called automatically by the RetrieveResult() method
-				// when c_countOfImagesToGrab images have been retrieved.
-				std::cout << " aojfbsak;jsn  camera.IsGrabbing" << std::endl;
-				while (camera.IsGrabbing())
+				cout << "3. FLipLattice()" << endl;
+				FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
+				cout << "3.1 FLipLattice()" << endl;
+				// Show phase data on SLM:
+				error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
+				if (error != HEDSERR_NoError)
 				{
-					// Wait for an image and then retrieve it. A timeout of 5000 ms is used.
-					camera.RetrieveResult(5000, ptrGrabResult, TimeoutHandling_ThrowException);
-
-					std::cout << " ptrGrabResult->GrabSucceeded" << std::endl;
-					// Image grabbed successfully?
-					if (ptrGrabResult->GrabSucceeded())
+					std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
+					return error;
+				}
+				cout << "3.2 FLipLattice()" << endl;
+				std::this_thread::sleep_for(std::chrono::milliseconds(150));
+				try
+				{
+					float energy = 0.f; // baslerCamera.collectSingleImageNEnergy(); // @R
+					// MH algo
+					float delE = energy - energies[energies.size() - 1];
+					// sum of Ising spins with numbers for fidelity
+					float prob = exp(-1.f * vecBetas[count] * delE);
+					float acceptance_probability = min((float)1.f, prob);
+					// Flip back if not selected in MH iter
+					double gen_pro = ((double)rand() / (RAND_MAX));
+					if (delE <= 0)
 					{
-						// Access the image data.
-						cout << "SizeX: " << ptrGrabResult->GetWidth() << endl;
-						cout << "SizeY: " << ptrGrabResult->GetHeight() << endl;
-						const uint8_t* pImageBuffer = (uint8_t*)ptrGrabResult->GetBuffer();
-						cout << "Gray value of first pixel: " << (uint32_t)pImageBuffer[0] << endl << endl;
-
-#ifdef PYLON_WIN_BUILD
-						// Display the grabbed image.
-						//Pylon::DisplayImage( 1, ptrGrabResult );
-					    // Create an OpenCV image out of pylon image
-						Mat openCvImage = Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC1, (void*)ptrGrabResult->GetBuffer());
-
-						imshow("my camera", openCvImage);
-						waitKey(0);
-#endif
-
-						// MH algo
-
-						// sum of Ising spins with numbers for fidelity
-
-						// Flip back if not selected in MH iter
-						FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
-
+						energies.push_back(energy);
+					}
+					else if (gen_pro < acceptance_probability)
+					{
+						energies.push_back(energy);
 					}
 					else
 					{
-						cout << "Error: " << std::hex << ptrGrabResult->GetErrorCode() << std::dec << " " << ptrGrabResult->GetErrorDescription() << endl;
+						FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
 					}
+					cout << "3.4 FLipLattice()" << endl;
+					count++;
+
+				}
+				catch (const GenericException & e)
+				{
+					// Error handling.
+					std::cerr << "An exception occurred." << endl
+						<< e.GetDescription() << endl;
+					exitCode = 1;
 				}
 			}
-			catch (const GenericException & e)
-			{
-				// Error handling.
-				std::cerr << "An exception occurred." << endl
-					<< e.GetDescription() << endl;
-				exitCode = 1;
-			}
-
 		}
-			// Wait until the SLM process was closed
+		auto end = std::chrono::high_resolution_clock::now();
+
+		double duration = (double)std::chrono::duration_cast<std::chrono::microseconds>(start - end).count();
+
+		std::cout << "Number of count: " << vecBetas.size() << " elapsed time: " << duration * 1e-6 << " ms\n";
+	
+		// Wait until the SLM process was closed
 		std::cout << "Waiting for SDK process to close. Please close the tray icon to continue ..." << std::endl << std::flush;
 		error = heds_utils_wait_until_closed();
 
@@ -405,18 +688,18 @@ int main(int argc, char* argv[])
 			return error;
 		}
 
-		camera.Close();
+#endif
+		baslerCamera.closeBaslerCamera();
 		// Releases all pylon resources.
-		PylonTerminate();
-		
+		PylonTerminate();		
 		// Comment the following two lines to disable waiting on exit.
 		std::cerr << endl << "Press enter to exit." << endl;
-		while (cin.get() != '\n');
+		while (std::cin.get() != '\n');
 
 		return exitCode;
 	
 }
-#endif
+
 
 #define CPU_GPU_COMPARISON 0
 
