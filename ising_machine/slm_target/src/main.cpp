@@ -9,42 +9,48 @@
 #include <math.h>
 #include <string.h>
 #include <iostream>
+#include <fstream>
 #include <algorithm>
+
+#include <thread>
+#include <chrono>
 
 #include <cpp/holoeye_slmdisplaysdk.hpp>
 #include <pylon/PylonIncludes.h>
 #include <pylon/BaslerUniversalInstantCamera.h>
 #include <slm_target/getopt.h>
 
-#ifdef PYLON_WIN_BUILD
-//    include <pylon/PylonGUI.h>
-#endif
-
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/stitching.hpp"
 #include "opencv2/core/core.hpp"
-using namespace holoeye;
 
-using HoloeyeType = field<float>;
+using namespace holoeye;
+#include "cpp/show_slm_preview.h"
+#include <slm_target\utils.hpp>
+
+using dataHoloType = float;
+using HoloeyeType = field<dataHoloType>;
 #define ASSERT(condition) { if(!(condition)){ std::cerr << "ASSERT FAILED: " << #condition << " @ " << __FILE__ << " (" << __LINE__ << ")" << std::endl; } }
 
 // Namespace for using pylon objects.
 using namespace Pylon;
 
 // Namespace for using cout.
-using namespace std;
+//using namespace std;
 using namespace cv;
 // Number of images to be grabbed.
 static const uint32_t c_countOfImagesToGrab = 1;
-#include "cpp/show_slm_preview.h"
 
-#include <thread>
-#include <chrono>
-#include <slm_target\utils.hpp>
+// Namespace for using GenApi objects.
+using namespace GenApi;
 
 #define NUM_SPINS_FLIP 4
-
+using std::cout;
+using std::vector;
+using std::pair;
+using std::shared_ptr;
+using std::endl;
 vector<pair< unsigned int, unsigned int> > SpinTuple(pair<unsigned int, unsigned int> shape
 	, unsigned int bin_size)
 {
@@ -53,9 +59,10 @@ vector<pair< unsigned int, unsigned int> > SpinTuple(pair<unsigned int, unsigned
 	{
 		for (unsigned int j = 0; j < shape.second / bin_size; j++) 
 		{
-			lattice_val.push_back(make_pair(i, j));
+			lattice_val.push_back(std::make_pair(i, j));
 		}
 	}
+	return lattice_val;
 }
 
 vector<double> create_beta_schedule_linear(uint32_t num_sweeps, double beta_start, double beta_end)
@@ -69,7 +76,7 @@ vector<double> create_beta_schedule_linear(uint32_t num_sweeps, double beta_star
 	double diff = (beta_start - beta_max) / (num_sweeps - 1);// A.P 3.28 - 0.01 inverse value increa final decrease
 	for (int i = 0; i < num_sweeps; i++)
 	{
-		double val = beta_start - (i)*diff;
+		double val = beta_start - (i) * diff;
 		beta_schedule.push_back( val );
 	}
 
@@ -81,7 +88,7 @@ void DisplayCheckerBoardPattern(shared_ptr<HoloeyeType>& phaseData, int dataWidt
 	// Initial it to zero
 	for (int y = 0; y < dataHeight; ++y)
 	{
-		float* row = phaseData->row(y);
+		dataHoloType* row = phaseData->row(y);
 		for (int x = 0; x < dataWidth; ++x)
 		{
 			row[x] = (float)0.0f;
@@ -98,7 +105,7 @@ void DisplayCheckerBoardPattern(shared_ptr<HoloeyeType>& phaseData, int dataWidt
 		{
 			for (int k = 0; k < outer_bins; ++k)
 			{
-				float* row = phaseData->row(y * outer_bins + k + sideHeight);
+				dataHoloType* row = phaseData->row(y * outer_bins + k + sideHeight);
 				for (int l = 0; l < outer_bins; ++l)
 					row[x * outer_bins + l + sideWidth] = HOLOEYE_PIF * ((x + y) % 2);
 			}
@@ -128,21 +135,20 @@ void InitialSLMLattice(shared_ptr<HoloeyeType>& phaseData, int dataWidth, int da
 		{
 			for (int k = 0; k < checkBin; ++k)
 			{
-				auto row = check[y * checkBin + k];
 				for (int l = 0; l < checkBin; ++l)
-					row[x * checkBin + l] = pow(-1.f, (x + y));
+					check[y * checkBin + k][x * checkBin + l] = pow(-1.f, (x + y));
 			}
 		}
 	}
 
-	
+	//cout << check[1][1] << check[131][131] << endl;
 	for (int y = 0; y < active_area.first / bins; ++y)
 	{
 		for (int x = 0; x < active_area.second / bins; ++x)
 		{
 			for (int k = 0; k < bins; ++k)
 			{
-				float* row = phaseData->row(y * bins + k + sideHeight);
+				dataHoloType* row = phaseData->row(y * bins + k + sideHeight);
 				// (-1)^j cos-1 Em
 				for (int l = 0; l < bins; ++l)
 					row[x * bins + l + sideWidth] =
@@ -157,34 +163,33 @@ void InitialSLMLattice(shared_ptr<HoloeyeType>& phaseData, int dataWidth, int da
 void FLipLattice(shared_ptr<HoloeyeType> phaseData, int dataWidth, int dataHeight, std::vector<float>& isingSpins,
 	pair<int, int> active_area, int bins, vector<pair< unsigned int, unsigned int> >  spinLatticePts, vector<unsigned int> selLatticeIndex)
 {
-	cout << "-2. FLipLattice " << endl;
+	
 	int sideHeight = (dataHeight - active_area.first) / 2;
 	int sideWidth = (dataWidth - active_area.second) / 2;
-	cout << "-1. FLipLattice " << endl;
+	
 	for (unsigned int sel_spin = 0; sel_spin < selLatticeIndex.size(); ++sel_spin)
 	{
-		int y = spinLatticePts.at(sel_spin).first;
-		int x = spinLatticePts.at(sel_spin).second;
-		cout << "0. FLipLattice" << endl;
+		unsigned int sel_Index = selLatticeIndex[sel_spin];
+		int y = spinLatticePts.at(sel_Index).first;
+		int x = spinLatticePts.at(sel_Index).second;
+
 		for (int k = 0; k < bins; ++k)
 		{
-			cout << "0. FLipLattice " << k << endl;
-			float* row = phaseData->row(y * bins + k + sideHeight);
+			
+			dataHoloType* row = phaseData->row(y * bins + k + sideHeight);
 			// (-1)^j cos-1 Em
 			for (int l = 0; l < bins; ++l)
 			{
 				if (isingSpins[y * (active_area.first / bins) + x] == 1.f)
 				{
 					row[x * bins + l + sideWidth] -= HOLOEYE_PIF;
+					//cout <<  "isingSpins == 1.f" << endl;
 				}
 				else if (isingSpins[y * (active_area.first / bins) + x] == -1.f)
 				{
 					row[x * bins + l + sideWidth] += HOLOEYE_PIF;
+					//cout << "isingSpins == -1.f" << endl;
 				}
-				else {
-					std::cout << "Rama rama" << std::endl;
-				}
-				cout << "1. FLipLattice " << endl;
 			}
 			
 		}
@@ -204,84 +209,135 @@ class BaslerCamera {
 public:
 	~BaslerCamera()
 	{
-		 delete _camera;
+		 //delete _camera;
 	}
-	BaslerCamera(int _timeoutMs = 5000, int width = 1920, int height= 1080, int offsetx = 64, int offsety = 4, float exposure_value = 1100.0)
+
+	/*
+	* Open Pylon viewer -> Feature All -> Image Format Control -> Change Width, Height, OffsetX, OffsetY
+	*/
+	BaslerCamera(int timeoutMs = 5000, int width = 1920, int height= 1080, int offsetx = 64, int offsety = 4, float exposure_time = 1100.0) 
 	{
-		// Create the device and attach it to CInstantCamera.
-		// Let CInstantCamera take care of destroying the device.
-		//_camera->Attach(CTlFactory::GetInstance().CreateFirstDevice(), Pylon::Cleanup_Delete);
-		//cout << "Using device " << _camera->GetDeviceInfo().GetModelName() << endl;
-		cout << "Device initialized" << endl;
-
-		_camera = new CBaslerUniversalInstantCamera(CTlFactory::GetInstance().CreateFirstDevice(), Pylon::Cleanup_Delete);
-		// Open camera.
-		_camera->Open();
-		_camera->DeviceLinkThroughputLimitMode.SetValue("Off");
-
-		//Set the camera Region of Interest (ROI) to maximize allowed frame rate
-		int64_t maxWidth = _camera->Width.GetMax();      // Maximum width of camera in pixels
-		int64_t maxHeight = _camera->Height.GetMax();    // Maximum height of camera in pixels
+		//
+		/*
+		* First create _camera object
+		* open camera object 
+		* set exposure time and all the other seting like width, height, offset
+		*/
 		
+		_camera.Attach(CTlFactory::GetInstance().CreateFirstDevice());
+		// Open the camera for accessing the parameters.
+		_camera.Open();
+		INodeMap& nodemap = _camera.GetNodeMap();
 
-		_camera->Width.SetValue(width);              // Set pixel width as lower than full allowed width
-		_camera->Height.SetValue(height);            // Set pixel height as lower than full allowed height
+		// Get camera device information.
+		cout << "Camera Device Information" << endl
+			<< "=========================" << endl;
+		cout << "Vendor           : "
+			<< CStringParameter(nodemap, "DeviceVendorName").GetValue() << endl;
+		cout << "Model            : "
+			<< CStringParameter(nodemap, "DeviceModelName").GetValue() << endl;
+		cout << "Firmware version : "
+			<< CStringParameter(nodemap, "DeviceFirmwareVersion").GetValue() << endl << endl;
 
-		// https://docs.baslerweb.com/image-roi
-		_camera->OffsetX.SetValue(offsetx);          // Setting origin of the sensor array from the top left corner
-		_camera->OffsetY.SetValue(offsety);
+		// Camera settings.
+		cout << "Camera Device Settings" << endl
+			<< "======================" << endl;
+		_timeoutMs = timeoutMs;
 
-		//camera.GetNodeMap();
-		_camera->AcquisitionFrameRateEnable.SetValue(true);
-		// https://docs.baslerweb.com/resulting-frame-rate#factors-limiting-the-frame-rate
-		// Decrease the exposure time, Image ROI, Sensor Bit Depth
-		_camera->AcquisitionFrameRate.SetValue(150.0);
-		//cout << "frame rate set" << endl;
-		double rate = _camera->ResultingFrameRate.GetValue();
-		cout << "frame rate is:" << rate << endl;
+		// Set the AOI:
 
-		//// Set the pixel data format.
-		
-		//_camera->PixelFormat.SetValue(Basler_UniversalCameraParams::PixelFormat_Mono8);
+		// Get the integer nodes describing the AOI.
+		CIntegerParameter offsetX(nodemap, "OffsetX");
+		CIntegerParameter offsetY(nodemap, "OffsetY");
+		CIntegerParameter width1(nodemap, "Width");
+		CIntegerParameter height1(nodemap, "Height");
+		cout << "Exposure_time           : 0" << endl;
+		CIntegerParameter Exposure_time(nodemap, "ExposureTime");
+		// On some cameras, the offsets are read-only.
+		// Therefore, we must use "Try" functions that only perform the action
+		// when parameters are writable. Otherwise, we would get an exception.
+		offsetX.TrySetToMinimum();
+		offsetY.TrySetToMinimum();
 
-		// Get the ExposureTime feature.
-		// On GigE cameras, the feature is called 'ExposureTimeRaw'.
-		// On USB cameras, it is called 'ExposureTime'.
-		if (_camera->ExposureTime.IsValid())
+		cout << "Exposure_time           : 1" << endl;
+		// Some properties have restrictions.
+		// We use API functions that automatically perform value corrections.
+		// Alternatively, you can use GetInc() / GetMin() / GetMax() to make sure you set a valid value.
+		width1.SetValue(width, IntegerValueCorrection_Nearest);
+		height1.SetValue(height, IntegerValueCorrection_Nearest);
+		offsetX.SetValue(offsetx, IntegerValueCorrection_Nearest);
+		offsetY.SetValue(offsety, IntegerValueCorrection_Nearest);
+		if (_camera.ExposureTime.IsValid())
 		{
 			// We need the integer representation because the GUI controls can only use integer values.
 			// If it doesn't exist, return an empty parameter.
-			_camera->ExposureTime.SetValue(exposure_value);
+			_camera.ExposureTime.SetValue(exposure_time);
 		}
-		else // if (_camera->ExposureTimeRaw.IsValid())
-		{
-			cout << "How dark" << endl;
-			// m_exposureTime.Attach(_camera->ExposureTimeRaw.GetNode());
-		}
-		
-	}
 
+		cout << "OffsetX          : " << offsetX.GetValue() << endl;
+		cout << "OffsetY          : " << offsetY.GetValue() << endl;
+		cout << "Width            : " << width1.GetValue() << endl;
+		cout << "Height           : " << height1.GetValue() << endl;
+		cout << "Exposure_time           : " << _camera.ExposureTime.GetValue() << endl;
+
+		// Access the PixelFormat enumeration type node.
+		CEnumParameter pixelFormat(nodemap, "PixelFormat");
+
+		// Remember the current pixel format.
+		String_t oldPixelFormat = pixelFormat.GetValue();
+		cout << "Old PixelFormat  : " << oldPixelFormat << endl;
+
+		// Set the pixel format to Mono8 if available.
+		if (pixelFormat.CanSetValue("Mono8"))
+		{
+			pixelFormat.SetValue("Mono8");
+			cout << "New PixelFormat  : " << pixelFormat.GetValue() << endl;
+		}
+
+		/*
+		// Set the new gain to 50% ->  Min + ((Max-Min) / 2).
+		//
+		// Note: Some newer camera models may have auto functions enabled.
+		//       To be able to set the gain value to a specific value
+		//       the Gain Auto function must be disabled first.
+		// Access the enumeration type node GainAuto.
+		// We use a "Try" function that only performs the action if the parameter is writable.
+		CEnumParameter gainAuto(nodemap, "GainAuto");
+		gainAuto.TrySetValue("Off");
+
+
+		// Check to see which Standard Feature Naming Convention (SFNC) is used by the camera device.
+		if (_camera.GetSfncVersion() >= Sfnc_2_0_0)
+		{
+			// Access the Gain float type node. This node is available for USB camera devices.
+			// USB camera devices are compliant to SFNC version 2.0.
+			CFloatParameter gain(nodemap, "Gain");
+			gain.SetValuePercentOfRange(50.0);
+			cout << "Gain (50%)       : " << gain.GetValue() << " (Min: " << gain.GetMin() << "; Max: " << gain.GetMax() << ")" << endl;
+		}
+		else
+		{
+			// Access the GainRaw integer type node. This node is available for IIDC 1394 and GigE camera devices.
+			CIntegerParameter gainRaw(nodemap, "GainRaw");
+			gainRaw.SetValuePercentOfRange(50.0);
+			cout << "Gain (50%)       : " << gainRaw.GetValue() << " (Min: " << gainRaw.GetMin() << "; Max: " << gainRaw.GetMax() << "; Inc: " << gainRaw.GetInc() << ")" << endl;
+		}
+		*/
+
+
+	}
+	// Grab_UsingExposureEndEvent
 	void checkImage()
 	{
-		cout << "here i am" << endl;
-		// This smart pointer will receive the grab result data.
-		
-		cout << "0. here i am" << endl;
-		// GrabOne calls StartGrabbing and StopGrabbing internally.
-		// As seen above Open() is called by StartGrabbing and
-		// the OnOpened() method of the CAcquireSingleFrameConfiguration handler is called.
-		//_camera->GrabOne(_timeoutMs, _ptrGrabResult);
-
 		//grab one image
-		_camera->StartGrabbing(1, GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
+		_camera.StartGrabbing(1, GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
 		//grab is stopped automatically due to maxImages = 1
-		_camera->RetrieveResult(_timeoutMs, _ptrGrabResult, TimeoutHandling_ThrowException) && _ptrGrabResult->GrabSucceeded();
+		bool hasRetrieved = _camera.RetrieveResult(_timeoutMs, _ptrGrabResult, TimeoutHandling_ThrowException) && _ptrGrabResult->GrabSucceeded();
 
-		cout << "1. here i am" << endl;
+		cout << "1. hasRetrieved: " << std::boolalpha << hasRetrieved << endl;
 		cout << "SizeX: " << _ptrGrabResult->GetWidth() << endl;
 		cout << "SizeY: " << _ptrGrabResult->GetHeight() << endl;
-		// Image grabbed successfully?
-		cout << "2. here i am" << endl;
+
 		if (_ptrGrabResult->GrabSucceeded())
 		{
 			Mat openCvImage = Mat(_ptrGrabResult->GetHeight(), _ptrGrabResult->GetWidth(), CV_8UC1, (void*)_ptrGrabResult->GetBuffer());
@@ -293,67 +349,124 @@ public:
 			imshow("My Window", openCvImage);
 			waitKey(0);
 		}
-		cout << "Provide _xin, _yin, _xout, _yout in this order" << endl;
+
+		cout << "Provide _xin, _yin, _xout, _yout in this order: " <<  endl;
+		/*
 		std::cin >> _xin;
 		std::cin >> _yin;
 		std::cin >> _xout;
 		std::cin >> _yout;
-		std::cout << " "<< _xin << " " << _yin << " " << _xout << " " << _yout << endl;
 		
 		_heightFinImg = _xout - _xin;
 		_widthFinImg = _yout - _yin;
 		_areaFinImg = _heightFinImg * _widthFinImg;
+		*/
 	}
 
 	void openBaslerCamera()
 	{
-		_camera->Open();
+		_camera.Open();
 	}
-
+	// Grab_UsingExposureEndEvent
 	float collectSingleImageNEnergy()
 	{
-		// https://docs.baslerweb.com/pylonapi/cpp/pylon_advanced_topics#one-by-one-grab-strategy
-		
-		//_camera->GrabOne(5000, _ptrGrabResult);
+		float energy = 0.f;
 
 		//grab one image
-		_camera->StartGrabbing(1, GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
-
+		_camera.StartGrabbing(1, GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
 		//grab is stopped automatically due to maxImages = 1
-		_camera->RetrieveResult(_timeoutMs, _ptrGrabResult, TimeoutHandling_ThrowException) && _ptrGrabResult->GrabSucceeded();
+		bool hasRetrieved = _camera.RetrieveResult(_timeoutMs, _ptrGrabResult, TimeoutHandling_ThrowException) && _ptrGrabResult->GrabSucceeded();
 
-		float energy;
-		
-		//if (_ptrGrabResult->GrabSucceeded())
-		//{
-			const uint8_t* pImageBuffer = (uint8_t*)_ptrGrabResult->GetBuffer();
-
+		/*
+		cout << "1. hasRetrieved: " << std::boolalpha << hasRetrieved << endl;
+		cout << "SizeX: " << _ptrGrabResult->GetWidth() << endl;
+		cout << "SizeY: " << _ptrGrabResult->GetHeight() << endl;
+		// Image grabbed successfully?
+		cout << "2. here i am" << endl;
+		*/
+		if (_ptrGrabResult->GrabSucceeded())
+		{
+			uint8_t* pImageBuffer = (uint8_t*)_ptrGrabResult->GetBuffer();
 			int sum = 0;
-			for (int y = _yin; y < _yout; ++y)
-				for (int x = _xin; x < _xout; x++)
-					sum += (int)pImageBuffer[y * _heightFinImg + x];
+			for (int y = 0; y < _ptrGrabResult->GetHeight(); ++y)// (int y = _yin; y < _yout; ++y)
+				for (int x = 0; x < _ptrGrabResult->GetWidth(); ++x)
+					sum += (int)pImageBuffer[y * _ptrGrabResult->GetWidth() + x];
+			energy = static_cast<float>(sum) / static_cast<float>(_ptrGrabResult->GetHeight() * _ptrGrabResult->GetWidth());
+			//cout << "Energy: " << energy << " sum: " << sum << endl;
+		}
+		else
+		{
+			energy = -1.f;//cout << "Error: " << std::hex << _ptrGrabResult->GetErrorCode() << std::dec << " " << _ptrGrabResult->GetErrorDescription() << endl;
+		}
 
-			energy = sum / _areaFinImg;
-		//}
-		//else
-		//{
-			//cout << "Error: " << std::hex << _ptrGrabResult->GetErrorCode() << std::dec << " " << _ptrGrabResult->GetErrorDescription() << endl;
-		//}
-		return energy;
+		return energy; // energy = -1 if hasRetrieved = false then rerun the loop
 	}
+
 	void closeBaslerCamera()
 	{
-		_camera->Close();
+		_camera.Close();
 	}
 private:
 	// C:\Program Files\Basler\pylon 6\Development\Samples\C++\GUI_MFCMultiCam\GuiCamera.cpp
-	CBaslerUniversalInstantCamera* _camera;
+	CBaslerUniversalInstantCamera _camera;
+
+	//CInstantCamera _camera;
 	// https://docs.baslerweb.com/auto-function-roi#sample-code
 	// CIntegerParameter m_exposureTime;
 	CGrabResultPtr _ptrGrabResult;
 	int _timeoutMs;
 	int _xin, _yin, _xout, _yout, _areaFinImg, _widthFinImg, _heightFinImg;
 };
+
+void CalculateHamiltonian(vector<vector<float>>& Ham, vector<float> numberVect)
+{
+	Ham.resize(numberVect.size());
+
+	for (int i = 0; i < numberVect.size(); i++)
+	{
+		Ham[i].resize(numberVect.size());
+	}
+
+	for (int i = 0; i < numberVect.size(); i++)
+	{
+		for (int j = 0; j < numberVect.size(); j++)
+		{
+			Ham[i][j] = (-1.f) * numberVect[i] * numberVect[j];
+		}
+	}
+}
+
+float CalculateEnergy(vector<vector<float>> Ham, vector<float> numberVect, vector<float> isingSpins)
+{
+	float energy = 0.f;
+
+	for (int i = 0; i < numberVect.size(); i++)
+	{
+		for (int j = 0; j < numberVect.size(); j++)
+		{
+			energy += (-1.f) * Ham[i][j] * isingSpins[i] * isingSpins[j];
+		}
+	}
+
+	return energy;
+}
+float DiffNumbers(vector<float> numberVect, vector<float> isingSpins)
+{
+	ASSERT(numberVect.size() == isingSpins.size() );
+
+	float diff = 0.f;
+	for (int i = 0; i < numberVect.size(); i++)
+	{
+		diff += numberVect.at(i) * isingSpins.at(i);
+	}
+	diff = abs(diff);
+	return diff;
+}
+
+void WriteToFile(std::ofstream& outputFile, float x)
+{
+	outputFile << x << endl;
+}
 
 static void usage(const char* pname) {
 
@@ -388,19 +501,24 @@ static void usage(const char* pname) {
 		bname);
 	exit(EXIT_SUCCESS);
 }
-
 #define MYDEBU 1
 
 
-// ./SPIM.exe -a numbers64.csv -x 6.4 -y 0.01 -n 3 -m 1 -1 1290 -2 508 -w 72 -h 92 -e 5000 -5 8 -6 512
+// ./SPIM.exe -a numbers_64.csv -x 6.4 -y 0.01 -n 3 -m 1 -1 1278 -2 550 -w 24 -h 30 -e 5000 -5 8 -6 512 // other side 1299 574
 int main(int argc, char* argv[])
 {
 	vector<float> energies;
+	vector<float> final_spins;
 	energies.push_back(255.0);
+
+	vector<float> hamEnergies;
+	vector<float> fidelities;
+
+
 	std::string filename = "";//argv[1]
 	std::string linear_file;
 
-	float start_temp = 20.f;
+	float start_temp = 600.f;
 	float stop_temp = 0.01f;
 	unsigned long long seed = ((GetCurrentProcessId() * rand()) & 0x7FFFFFFFF);
 
@@ -505,18 +623,57 @@ int main(int argc, char* argv[])
 	HOLOEYE_UNUSED(argc);
 	HOLOEYE_UNUSED(argv);
 
+		//
+		std::string hamEnergy_filename = "hamEnergy_";
+		std::string fidelity_filename = "fidelity_";
+		std::string spins_filename = "spins_";
+		{
+			// Find position of '_' using find()
+			int pos = filename.find_last_of("_");
+			// Copy substring after pos
+			std::string sub = filename.substr(pos + 1);
+			hamEnergy_filename += sub;
+			fidelity_filename += sub;
+			spins_filename += sub;
+		}
 
+		std::ofstream hamEnergy_outputFile;
+		hamEnergy_outputFile.open(hamEnergy_filename.c_str());
+
+		std::ofstream fidelity_outputFile;
+		fidelity_outputFile.open(fidelity_filename.c_str());
+
+		std::ofstream spins_outputFile;
+		spins_outputFile.open(spins_filename.c_str());
+
+		ParseData parseObj = ParseData();
+
+		vector<float> numberVect;
+		parseObj.readNumberCSV(filename, numberVect);
+		float maxNum = *std::max_element(numberVect.begin(), numberVect.end());
+
+		vector<float> normalNumberVect(numberVect);
+		for (int i = 0; i < normalNumberVect.size(); i++)
+			normalNumberVect[i] = acos(normalNumberVect.at(i) / maxNum);
+		cout << "Parse the numbers from csv file" << endl;
 		// Check if the installed SDK supports the required API version
 		if (!heds_requires_version(3, false))
 			return 1;
+		vector<vector<float>> Hamiltonian;
+		CalculateHamiltonian(Hamiltonian, numberVect);
+		int exitCode = 0;
+
+
+#if MYDEBU
 		// Before using any pylon methods, the pylon runtime must be initialized.
 		PylonInitialize();
 		// The exit code of the sample application.
 
-		BaslerCamera baslerCamera = BaslerCamera(CamtimeoutMs, width, height, offsetx, offsety, exposure_value);
-		int exitCode = 0;
-		//baslerCamera.checkImage();
-#if MYDEBU
+		BaslerCamera baslerCamera(CamtimeoutMs, width, height, offsetx, offsety, exposure_value); // = BaslerCamera(CamtimeoutMs, width, height, offsetx, offsety, exposure_value);
+		
+
+		baslerCamera.openBaslerCamera();
+
 		// Detect SLMs and open a window on the selected SLM:
 		heds_instance slm;
 		heds_errorcode error = slm.open();
@@ -557,7 +714,7 @@ int main(int argc, char* argv[])
 		pair< int, int> area = { are, are };
 		DisplayCheckerBoardPattern(phaseData, dataWidth, dataHeight, area, outer_bin);
 		// Show phase data on SLM:
-		error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
+		error = heds_show_phasevalues(phaseData); //heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
 		if (error != HEDSERR_NoError)
 		{
 			std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
@@ -568,98 +725,100 @@ int main(int argc, char* argv[])
 		std::this_thread::sleep_for(std::chrono::milliseconds(150));
 		std::cout << "Do Ur calibration Using Pylon GUI and then press enter" << std::endl;
 		char ch = getchar();
-		//
-		ParseData parseObj = ParseData();
 
-		std::vector<float> numberVect;
-		parseObj.readNumberCSV(filename, numberVect);
-		float maxNum = *std::max_element(numberVect.begin(), numberVect.end());
-
-		for (int i = 0; i < numberVect.size(); i++)
-			numberVect[i] = acos(numberVect.at(i) / maxNum);
 
 		std::vector<float> isingSpins;
 		srand(time(0));
 		for (int i = 0; i < numberVect.size(); ++i)
 			isingSpins.push_back( float( 2.f * (rand() % 2) - 1.f) );
 
-		//for (int i = 0; i < isingSpins.size(); ++i)
-		//	isingSpins[i] = (isingSpins[i] + 1) * HOLOEYE_PIF / 2 + HOLOEYE_PIF / 2; //@R remove PI from Ising Spins
 
  		ASSERT(numberVect.size() == isingSpins.size());
 		int bin = bi;// pow(2, 3);// pow(2, 7);
 		pair<int, int> active_area = { act_are, act_are};
-		cout << "1. InitialSLMLattice" << endl;
-		InitialSLMLattice(phaseData, dataWidth, dataHeight, numberVect, isingSpins, active_area, bin);
+		//cout << "1. InitialSLMLattice" << endl;
+		InitialSLMLattice(phaseData, dataWidth, dataHeight, normalNumberVect, isingSpins, active_area, bin);
 
 		// Show phase data on SLM:
-		error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
+		error = heds_show_phasevalues(phaseData); // heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
 		if (error != HEDSERR_NoError)
 		{
 			std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
 			return error;
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(150));
-		std::cout << "See the expected pattern on camera" << std::endl;
-		//baslerCamera.checkImage();// @R
-		
-
-		vector<double> vecBetas = create_beta_schedule_linear(num_temps, 1.f / start_temp, 1.f / stop_temp);
-		cout << "2. baslerCamera.openBaslerCamera()" << endl;
-		baslerCamera.openBaslerCamera();
+		//std::cout << "See the expected pattern on camera" << std::endl;
+		baslerCamera.checkImage();// @R
+	
+		vector<double> vecBetas = create_beta_schedule_linear(num_temps,  start_temp, stop_temp);
 
 		// Lattice creation
 		vector<pair< unsigned int, unsigned int> >  spinLatticePts = SpinTuple( active_area, bin);
 		vector<unsigned int> selLatticeIndex; 
 		selLatticeIndex.resize(NUM_SPINS_FLIP, 0);
 
-
+		float best_diff = std::numeric_limits<float>::infinity();
 		auto start = std::chrono::high_resolution_clock::now();
-		cout << "2.5. MH Loop " << endl;
 		// Flip lattice
 		for (int count = 0; count < vecBetas.size(); )
 		{
 			for (int ii = 0; ii < num_sweeps_per_beta; ++ii)
 			{	
 				for (int i = 0; i < NUM_SPINS_FLIP; i++)
-					selLatticeIndex[i] = rand() % spinLatticePts.size();
+					selLatticeIndex[i] = static_cast<unsigned int>( rand() % spinLatticePts.size() );
 
-				cout << "3. FLipLattice()" << endl;
 				FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
-				cout << "3.1 FLipLattice()" << endl;
 				// Show phase data on SLM:
-				error = heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
+				error = heds_show_phasevalues(phaseData); //heds_show_phasevalues(phaseData, HEDSSHF_PresentAutomatic, phaseModulation);
 				if (error != HEDSERR_NoError)
 				{
 					std::cerr << "ERROR: " << heds_error_string_ascii(error) << std::endl;
 					return error;
 				}
-				cout << "3.2 FLipLattice()" << endl;
 				std::this_thread::sleep_for(std::chrono::milliseconds(150));
 				try
 				{
-					float energy = 0.f; // baslerCamera.collectSingleImageNEnergy(); // @R
-					// MH algo
-					float delE = energy - energies[energies.size() - 1];
-					// sum of Ising spins with numbers for fidelity
-					float prob = exp(-1.f * vecBetas[count] * delE);
-					float acceptance_probability = min((float)1.f, prob);
-					// Flip back if not selected in MH iter
-					double gen_pro = ((double)rand() / (RAND_MAX));
-					if (delE <= 0)
+					float energy = baslerCamera.collectSingleImageNEnergy(); // @R
+					//cout << "Energy: " << energy << endl;
+					if (energy != -1.f)
 					{
-						energies.push_back(energy);
+						// MH algo
+						float delE = energy - energies[energies.size() - 1];
+						// sum of Ising spins with numbers for fidelity
+						float prob = exp(-1.f * vecBetas[count] * delE);
+						float acceptance_probability = min((float)1.f, prob);
+						// Flip back if not selected in MH iter
+						double gen_pro = ((double)rand() / (RAND_MAX));
+						if (delE <= 0)
+						{
+							energies.push_back(energy);
+							cout << "delE <= 0 and accepted the config" << endl;
+						}
+						else if (gen_pro >= acceptance_probability)
+						{
+							energies.push_back(energy);
+							cout << "delE > 0 and accepted the config" << endl;
+						}
+						else
+						{
+							cout << "delE > 0 and rejected the config" << endl;
+							FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
+						}
+						count++;
+						float Hamltonian_Energy = CalculateEnergy(Hamiltonian, numberVect, isingSpins);
+						// Calculate the Hamiltonian Energy
+						hamEnergies.push_back(Hamltonian_Energy);
+						// Calculate the fidelity
+						float diff = DiffNumbers(numberVect, isingSpins);
+						cout << "Intensity: " << energy << " Hamltonian: " << Hamltonian_Energy << " Difference: " << diff << endl;
+						fidelities.push_back(diff);
+						if (diff < best_diff)
+						{
+							best_diff = diff;
+							copy(isingSpins.begin(), isingSpins.end(), back_inserter(final_spins));
+						}
+
 					}
-					else if (gen_pro < acceptance_probability)
-					{
-						energies.push_back(energy);
-					}
-					else
-					{
-						FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
-					}
-					cout << "3.4 FLipLattice()" << endl;
-					count++;
 
 				}
 				catch (const GenericException & e)
@@ -667,7 +826,8 @@ int main(int argc, char* argv[])
 					// Error handling.
 					std::cerr << "An exception occurred." << endl
 						<< e.GetDescription() << endl;
-					exitCode = 1;
+					
+					FLipLattice(phaseData, dataWidth, dataHeight, isingSpins, active_area, bin, spinLatticePts, selLatticeIndex);
 				}
 			}
 		}
@@ -688,12 +848,24 @@ int main(int argc, char* argv[])
 			return error;
 		}
 
-#endif
+		for (int ii = 0; ii < hamEnergies.size(); ii++)
+		{
+			WriteToFile(hamEnergy_outputFile, hamEnergies[ii]);
+			WriteToFile(fidelity_outputFile, fidelities[ii]);
+		}
+		cout << "Best diff: " << best_diff << endl;
+		
+		for (int ii = 0; ii < final_spins.size(); ii++)
+		{
+			WriteToFile(spins_outputFile, final_spins[ii]);
+		}
 		baslerCamera.closeBaslerCamera();
 		// Releases all pylon resources.
-		PylonTerminate();		
+		PylonTerminate();
+#endif
+	
 		// Comment the following two lines to disable waiting on exit.
-		std::cerr << endl << "Press enter to exit." << endl;
+		std::cerr << endl << "Press enter to exit. with best diff: " << best_diff << endl;
 		while (std::cin.get() != '\n');
 
 		return exitCode;
@@ -704,6 +876,13 @@ int main(int argc, char* argv[])
 #define CPU_GPU_COMPARISON 0
 
 #if CPU_GPU_COMPARISON
+
+Show the pattern on slm
+wait for 50ms 
+
+Parallel (Image capture && \sum n * s)
+
+Bandwidth manager
 // https://holoeye.com/wp-content/uploads/Application_Note_SLM-V.59.pdf
 
 // https://sodocumentation.net/cuda/topic/6566/parallel-reduction--e-g--how-to-sum-an-array-#:~:text=The%20simplest%20approach%20to%20parallel,)%20%7B%20int%20idx%20%3D%20threadIdx.
